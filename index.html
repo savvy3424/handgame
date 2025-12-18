@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cyber Hunter AR</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #00ff88; pointer-events: none; }
+        #author { position: absolute; top: 10px; right: 20px; color: #777; font-size: 12px; }
+        #controls { color: #aaa; font-size: 14px; margin-top: 10px; }
+        video { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div id="score" style="font-size: 32px; font-weight: bold;">SCORE: 0</div>
+    <div id="mode" style="font-size: 18px;">MODE: WEBCAM</div>
+    <div id="controls">
+        [M] Switch Mode<br>
+        [Click/Tap] Shoot
+    </div>
+</div>
+<div id="author">Created by Savvy</div>
+
+<video id="video" playsinline></video>
+<canvas id="gameCanvas"></canvas>
+
+<!-- MediaPipe Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const modeEl = document.getElementById('mode');
+
+let score = 0;
+let inputMode = "WEBCAM"; 
+let targets = [];
+let lastShotTime = 0;
+let cursor = { x: 0, y: 0 };
+const LIFETIME = 8000; // 8 секунд
+
+const enemyImg = new Image(); enemyImg.src = 'astronaut.png';
+const allyImg = new Image(); allyImg.src = 'satellite.png';
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function spawnTarget(isEnemy) {
+    return {
+        x: Math.random() * (canvas.width - 150) + 50,
+        y: Math.random() * (canvas.height - 150) + 50,
+        isEnemy: isEnemy,
+        spawnTime: Date.now(),
+        size: isEnemy ? 130 : 100
+    };
+}
+
+// Initial targets
+targets.push(spawnTarget(true));
+for(let i=0; i<3; i++) targets.push(spawnTarget(false));
+
+function checkHit(x, y) {
+    const now = Date.now();
+    if (now - lastShotTime < 300) return;
+
+    for (let i = 0; i < targets.length; i++) {
+        let t = targets[i];
+        if (x > t.x && x < t.x + t.size && y > t.y && y < t.y + t.size) {
+            if (t.isEnemy) score += 100;
+            else score -= 200;
+            targets[i] = spawnTarget(t.isEnemy);
+            lastShotTime = now;
+            scoreEl.innerText = `SCORE: ${score}`;
+            break;
+        }
+    }
+}
+
+// Mouse controls
+window.addEventListener('mousemove', (e) => {
+    if (inputMode === "MOUSE") { cursor.x = e.clientX; cursor.y = e.clientY; }
+});
+window.addEventListener('mousedown', (e) => {
+    if (inputMode === "MOUSE") checkHit(e.clientX, e.clientY);
+});
+window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'm') {
+        inputMode = inputMode === "WEBCAM" ? "MOUSE" : "WEBCAM";
+        modeEl.innerText = `MODE: ${inputMode}`;
+    }
+});
+
+// Hand Tracking
+const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.5
+});
+
+hands.onResults((results) => {
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw Webcam Background
+    ctx.scale(-1, 1);
+    ctx.translate(-canvas.width, 0);
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    const now = Date.now();
+
+    // Process Hand
+    if (inputMode === "WEBCAM" && results.multiHandLandmarks.length > 0) {
+        const lm = results.multiHandLandmarks[0][8]; // Index finger
+        cursor.x = (1 - lm.x) * canvas.width;
+        cursor.y = lm.y * canvas.height;
+        checkHit(cursor.x, cursor.y);
+    }
+
+    // Draw Targets
+    targets.forEach((t, i) => {
+        if (now - t.spawnTime > LIFETIME) {
+            targets[i] = spawnTarget(t.isEnemy);
+        }
+        const img = t.isEnemy ? enemyImg : allyImg;
+        try {
+            ctx.drawImage(img, t.x, t.y, t.size, t.size);
+        } catch(e) {
+            ctx.fillStyle = t.isEnemy ? 'red' : 'green';
+            ctx.beginPath();
+            ctx.arc(t.x + t.size/2, t.y + t.size/2, t.size/2, 0, Math.PI*2);
+            ctx.fill();
+        }
+        
+        // Progress Bar
+        const pct = 1 - (now - t.spawnTime) / LIFETIME;
+        ctx.fillStyle = 'yellow';
+        ctx.fillRect(t.x, t.y - 10, t.size * pct, 5);
+    });
+
+    // Draw Cursor
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cursor.x, cursor.y, 20, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.fillStyle = 'white';
+    ctx.beginPath();
+    ctx.arc(cursor.x, cursor.y, 3, 0, Math.PI*2);
+    ctx.fill();
+
+    requestAnimationFrame(() => {});
+});
+
+const camera = new Camera(video, {
+    onFrame: async () => { await hands.send({image: video}); },
+    width: 1280, height: 720
+});
+camera.start();
+
+</script>
+</body>
+</html>
